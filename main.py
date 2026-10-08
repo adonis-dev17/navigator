@@ -384,9 +384,9 @@ async def analyze_note(request: NoteRequest):
 
         if src in valid:
             title = next((r["title"] for r in load_kb() if r["source"] == src), "")
-        elif best["source"].startswith("http"):
+        elif src and best["source"].startswith("http"):
             src, title = best["source"], best["title"]
-        elif reference:
+        elif src and reference:
             src, title = reference["source"], reference["title"]
         else:
             src, title = "", ""

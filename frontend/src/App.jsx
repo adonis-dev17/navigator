@@ -484,6 +484,13 @@ export default function App() {
               <textarea
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    if (!loading && note.trim() && !isListening)
+                      handleSearch(note);
+                  }
+                }}
                 rows={3}
                 placeholder="e.g. Student purchased an OOP title and needs assistance..."
                 className="w-full bg-transparent text-sm focus:outline-none resize-none placeholder-slate-400"
