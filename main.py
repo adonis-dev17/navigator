@@ -207,6 +207,9 @@ say so in "warnings" rather than applying the wrong procedure.
 "source" must be a URL copied exactly from a "Link:" line in the context.
 If no Link line appears, set "source" to an empty string. Never guess a URL.
 
+Write every text field as plain text. No markdown: no asterisks, no bold,
+no headings. Use "- " for bullets and new lines between steps.
+
 "ask" is a short opener the agent reads first — under 25 words, one question
 or statement. "script" is the full spoken script with all necessary detail.
 

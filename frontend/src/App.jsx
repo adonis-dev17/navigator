@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import {
   Mic,
   Copy,
@@ -52,6 +53,14 @@ export default function App() {
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [recordSecs, setRecordSecs] = useState(0);
   const [activeAlert, setActiveAlert] = useState(null);
+  // Which alert the agent closed. The schedule re-checks every 10s, so we
+  // remember the dismissal instead of just clearing activeAlert.
+  const [dismissedAlert, setDismissedAlert] = useState(null);
+  // True once the banner has scrolled off the top: alert docks in the header.
+  const [alertDocked, setAlertDocked] = useState(false);
+  const [alertSlotHeight, setAlertSlotHeight] = useState(null);
+  const alertSlotRef = useRef(null);
+  const reduceMotion = useReducedMotion();
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -115,13 +124,43 @@ export default function App() {
     return () => clearInterval(interval);
   }, [schedule]);
 
+  const alertKey = activeAlert
+    ? `${activeAlert.type}@${activeAlert.time}`
+    : null;
+  const shownAlert =
+    activeAlert && alertKey !== dismissedAlert ? activeAlert : null;
+  const dismissAlert = () => setDismissedAlert(alertKey);
+  const alertWhen = (a) => (a.minsLeft === 0 ? "now" : `in ${a.minsLeft} min`);
+  const alertSpring = reduceMotion
+    ? { duration: 0 }
+    : { type: "spring", stiffness: 380, damping: 32 };
+
+  useEffect(() => {
+    if (!shownAlert) {
+      setAlertDocked(false);
+      setAlertSlotHeight(null);
+      return;
+    }
+    const onScroll = () => {
+      const slot = alertSlotRef.current;
+      if (!slot) return;
+      const rect = slot.getBoundingClientRect();
+      const docked = rect.bottom < 24;
+      if (docked && !alertSlotHeight) setAlertSlotHeight(rect.height);
+      setAlertDocked(docked);
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [shownAlert, alertSlotHeight]);
+
   useEffect(() => {
     let titleInterval;
-    if (activeAlert) {
+    if (shownAlert) {
       let isBlink = false;
       titleInterval = setInterval(() => {
         document.title = isBlink
-          ? `⏰ (${activeAlert.minsLeft}m) ${activeAlert.type.toUpperCase()} SOON!`
+          ? `⏰ (${shownAlert.minsLeft}m) ${shownAlert.type.toUpperCase()} SOON!`
           : "🚨 AUX BREAK REMINDER";
         isBlink = !isBlink;
       }, 1000);
@@ -132,7 +171,7 @@ export default function App() {
       clearInterval(titleInterval);
       document.title = "NAVIGATOR - AI Call Center Copilot";
     };
-  }, [activeAlert]);
+  }, [shownAlert?.type, shownAlert?.minsLeft]);
 
   useEffect(() => {
     let interval;
@@ -297,36 +336,64 @@ export default function App() {
       )}
 
       <div className="max-w-6xl mx-auto flex flex-col space-y-6 relative z-10">
-        {activeAlert && (
-          <div className="bg-gradient-to-r from-rose-600 via-pink-600 to-amber-600 text-white p-4 rounded-2xl shadow-lg flex justify-between items-center animate-pulse border border-rose-400">
-            <div className="flex items-center gap-3">
-              <div className="bg-white/20 p-2 rounded-xl backdrop-blur-sm">
-                <Bell className="w-6 h-6 text-white animate-bounce" />
-              </div>
-              <div>
-                <h3 className="font-extrabold text-sm uppercase tracking-wider">
-                  Upcoming Schedule Reminder
-                </h3>
-                <p className="text-xs font-medium text-rose-100">
-                  Your{" "}
-                  <span className="underline font-bold text-white">
-                    {activeAlert.type}
-                  </span>{" "}
-                  is scheduled at{" "}
-                  <span className="font-bold text-white">
-                    {activeAlert.time}
-                  </span>{" "}
-                  (in {activeAlert.minsLeft} minutes). Wrap up your current case
-                  to maintain adherence!
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={() => setActiveAlert(null)}
-              className="bg-white/20 hover:bg-white/30 text-white p-1.5 rounded-lg text-xs font-semibold transition"
-            >
-              <X className="w-4 h-4" />
-            </button>
+        {/* Alert slot keeps its height while the alert is docked in the
+            header, so the page does not jump when it moves. */}
+        {shownAlert && (
+          <div
+            ref={alertSlotRef}
+            style={{
+              minHeight: alertDocked ? alertSlotHeight || undefined : undefined,
+            }}
+          >
+            <AnimatePresence mode="popLayout">
+              {!alertDocked && (
+                <motion.div
+                  key="banner"
+                  layoutId="aux-alert"
+                  transition={alertSpring}
+                  role="alert"
+                  className="relative overflow-hidden rounded-2xl text-white bg-gradient-to-r from-rose-600 via-pink-600 to-amber-500 shadow-[0_10px_40px_-10px_rgba(244,63,94,0.6)] border border-rose-300/40"
+                >
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: reduceMotion ? 0 : 0.2 }}
+                    className="flex items-center gap-4 p-4"
+                  >
+                    <div className="relative shrink-0 w-12 h-12 rounded-xl bg-white/15 flex items-center justify-center">
+                      <span className="absolute inset-0 rounded-xl ring-2 ring-white/40 motion-safe:animate-ping" />
+                      <Bell className="w-6 h-6 motion-safe:animate-bounce" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-base font-bold leading-tight">
+                        {shownAlert.type} {alertWhen(shownAlert)}
+                      </p>
+                      <p className="text-sm text-rose-50/90">
+                        Scheduled for {shownAlert.time}. Wrap up your current
+                        case to stay in adherence.
+                      </p>
+                    </div>
+                    <button
+                      onClick={dismissAlert}
+                      aria-label="Dismiss break reminder"
+                      className="shrink-0 bg-white/20 hover:bg-white/30 p-2 rounded-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </motion.div>
+                  {/* Drains as the break approaches (10-minute window). */}
+                  <div className="absolute bottom-0 left-0 h-1 w-full bg-black/15">
+                    <div
+                      className="h-full bg-white/80 transition-[width] duration-1000"
+                      style={{
+                        width: `${Math.max(4, (shownAlert.minsLeft / 10) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         )}
 
@@ -352,6 +419,41 @@ export default function App() {
                 </p>
               </div>
             </div>
+
+            <AnimatePresence mode="popLayout">
+              {shownAlert && alertDocked && (
+                <div
+                  key="pill-wrap"
+                  className="lg:absolute lg:left-1/2 lg:top-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2"
+                >
+                  <motion.div
+                    key="pill"
+                    layoutId="aux-alert"
+                    transition={alertSpring}
+                    role="alert"
+                    className="flex items-center gap-2.5 pl-2 pr-1.5 py-1.5 rounded-full text-white bg-gradient-to-r from-rose-600 to-pink-600 border border-rose-300/40 shadow-[0_0_24px_rgba(244,63,94,0.55)]"
+                  >
+                    <span className="relative flex w-7 h-7 items-center justify-center rounded-full bg-white/20">
+                      <span className="absolute inset-0 rounded-full bg-white/30 motion-safe:animate-ping" />
+                      <Bell className="relative w-3.5 h-3.5" />
+                    </span>
+                    <span className="text-xs font-bold whitespace-nowrap">
+                      {shownAlert.type} {alertWhen(shownAlert)}
+                    </span>
+                    <span className="text-xs text-rose-100/80 whitespace-nowrap">
+                      {shownAlert.time}
+                    </span>
+                    <button
+                      onClick={dismissAlert}
+                      aria-label="Dismiss break reminder"
+                      className="ml-1 p-1 rounded-full hover:bg-white/25 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </motion.div>
+                </div>
+              )}
+            </AnimatePresence>
 
             <div className="flex items-center gap-4">
               <button
@@ -637,7 +739,7 @@ export default function App() {
                         <p
                           className={`text-base font-medium p-4 rounded-xl border whitespace-pre-line ${darkMode ? "bg-slate-800/40 border-slate-700/50 text-slate-100" : "bg-white/60 border-slate-200 text-slate-900"}`}
                         >
-                          {data.script}
+                          {data.script.replace(/\*\*/g, "")}
                         </p>
                       )}
                     </div>
