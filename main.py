@@ -3,7 +3,6 @@ import re
 import json
 import math
 import httpx
-import boto3
 import pandas as pd
 from collections import Counter
 from functools import lru_cache
@@ -24,34 +23,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Clients --------------------------------------------------------------
-# Groq handles transcription always (Bedrock has no speech-to-text).
-# Analysis uses Bedrock when configured, Groq otherwise.
+# --- Client ---------------------------------------------------------------
+# Groq handles everything: issue splitting, analysis and transcription.
 
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b").strip()
 client = None
 
 if GROQ_KEY:
     try:
         client = Groq(api_key=GROQ_KEY, http_client=httpx.Client(verify=False))
-        print("Groq client ready")
+        print(f"Groq client ready: {GROQ_MODEL}")
     except Exception as e:
         print(f"Groq init failed: {e}")
 else:
     print("WARNING: GROQ_API_KEY missing from .env")
-
-BEDROCK_REGION = os.environ.get("AWS_REGION", "us-east-1")
-BEDROCK_MODEL = os.environ.get("BEDROCK_MODEL_ID", "").strip()
-bedrock = None
-
-if (os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_BEARER_TOKEN_BEDROCK")) and BEDROCK_MODEL:
-    try:
-        bedrock = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
-        print(f"Bedrock ready: {BEDROCK_MODEL} in {BEDROCK_REGION}")
-    except Exception as e:
-        print(f"Bedrock init failed: {e}")
-else:
-    print("Bedrock not configured - analysis will use Groq")
 
 
 # --- Retrieval ------------------------------------------------------------
@@ -270,9 +256,8 @@ def error_payload(msg):
 
 
 def ask_model(system, user, temperature=0.2):
-    """Groq call. Used for issue splitting and as the analysis fallback."""
     completion = client.chat.completions.create(
-        model="openai/gpt-oss-120b",
+        model=GROQ_MODEL,
         response_format={"type": "json_object"},
         temperature=temperature,
         messages=[
@@ -283,49 +268,15 @@ def ask_model(system, user, temperature=0.2):
     return json.loads(completion.choices[0].message.content)
 
 
-def ask_bedrock(system, user, temperature=0.2):
-    """Bedrock has no JSON mode. Some models add a preamble or split the
-    reply across blocks, so join everything and keep only the outermost
-    braces."""
-    resp = bedrock.converse(
-        modelId=BEDROCK_MODEL,
-        system=[{"text": system}],
-        messages=[{"role": "user", "content": [{"text": user}]}],
-        inferenceConfig={"temperature": temperature, "maxTokens": 2000},
-    )
-    blocks = resp["output"]["message"]["content"]
-    raw = "".join(b.get("text", "") for b in blocks).strip()
-    start, end = raw.find("{"), raw.rfind("}")
-    if start != -1 and end != -1:
-        raw = raw[start:end + 1]
-    return json.loads(raw)
-
-
-# --- Analysis: Bedrock when available, Groq as fallback -------------------
-
 def generate_analysis(context, note):
     user_msg = f"CONTEXT:\n{context}\n\nCUSTOMER INQUIRY:\n\"{note}\""
-    if bedrock:
-        try:
-            return ask_bedrock(SYSTEM_PROMPT, user_msg)
-        except Exception as e:
-            print(f"[BEDROCK FAILED] {e} - falling back to Groq")
-            if not client:
-                raise
     return ask_model(SYSTEM_PROMPT, user_msg)
 
 
 def split_issues(note):
     """Returns a list of distinct issues. Falls back to the whole note."""
     try:
-        result = None
-        if bedrock:
-            try:
-                result = ask_bedrock(SPLIT_PROMPT, note, temperature=0)
-            except Exception as e:
-                print(f"[BEDROCK SPLIT FAILED] {e}")
-        if result is None:
-            result = ask_model(SPLIT_PROMPT, note, temperature=0)
+        result = ask_model(SPLIT_PROMPT, note, temperature=0)
         issues = [str(i).strip() for i in result.get("issues", []) if str(i).strip()]
         return issues[:3] if issues else [note]
     except Exception as e:
@@ -343,8 +294,9 @@ class NoteRequest(BaseModel):
 async def health():
     return {
         "groq": client is not None,
-        "bedrock": bedrock is not None,
-        "engine": "bedrock" if bedrock else "groq",
+        "bedrock": False,
+        "engine": "groq",
+        "model": GROQ_MODEL,
         "entries": len(load_kb()),
     }
 
@@ -353,8 +305,8 @@ async def health():
 async def analyze_note(request: NoteRequest):
     note = request.note
     print(f"\n[QUERY] {note}")
-    if not client and not bedrock:
-        return error_payload("No AI client configured. Check .env")
+    if not client:
+        return error_payload("No AI client configured. Check GROQ_API_KEY in .env")
 
     try:
         issues = split_issues(note)
@@ -404,7 +356,6 @@ async def analyze_note(request: NoteRequest):
 
 @app.post("/api/transcribe")
 async def transcribe_audio(audio: UploadFile = File(...)):
-    """Always Groq — Bedrock has no speech-to-text model."""
     if not client:
         return {"transcript": "Error: Groq client not initialised."}
     try:
