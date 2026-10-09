@@ -281,7 +281,7 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen font-sans p-4 md:p-8 transition-colors duration-500 relative overflow-hidden ${darkMode ? "bg-slate-950 text-slate-100" : "bg-slate-100 text-slate-800"}`}
+      className={`min-h-screen font-sans p-4 md:p-8 transition-colors duration-500 relative overflow-x-clip ${darkMode ? "bg-slate-950 text-slate-100" : "bg-slate-100 text-slate-800"}`}
     >
       {darkMode && (
         <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none opacity-50">
@@ -331,6 +331,7 @@ export default function App() {
         )}
 
         <GlassCard
+          className="sticky top-4 z-50"
           tint={
             darkMode
               ? "oklch(0.2 0.05 240 / 0.4)"
